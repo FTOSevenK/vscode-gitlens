@@ -1,6 +1,5 @@
 import type { AuthenticationSession, CancellationToken, Disposable, Uri } from 'vscode';
-import { authentication, CancellationTokenSource, window } from 'vscode';
-import { wrapForForcedInsecureSSL } from '@env/fetch';
+import { CancellationTokenSource, window } from 'vscode';
 import type { Container } from '../../../container';
 import { debug, log } from '../../../system/decorators/log';
 import type { DeferredEventExecutor } from '../../../system/event';
@@ -48,6 +47,13 @@ export class IntegrationAuthenticationProvider {
 	getSessionId(descriptor?: IntegrationAuthenticationSessionDescriptor): string {
 		return descriptor?.domain ?? '';
 	}
+
+	@debug()
+	async deleteSession(descriptor?: IntegrationAuthenticationSessionDescriptor) {
+		const key = this.getSecretKey(this.authProviderId, this.getSessionId(descriptor));
+		await this.container.storage.deleteSecret(key);
+	}
+
 	async createSession(
 		descriptor?: IntegrationAuthenticationSessionDescriptor,
 		options?: { authorizeIfNeeded?: boolean },
@@ -143,6 +149,76 @@ export class IntegrationAuthenticationProvider {
 	protected getUriHandlerDeferredExecutor(): DeferredEventExecutor<Uri, string> {
 		throw new Error('Method `getUriHandlerDeferredExecutor` must be implemented in subclass');
 	}
+
+	private getSecretKey(providerId: IntegrationId, id: string): `gitlens.integration.auth:${IntegrationId}|${string}` {
+		return `gitlens.integration.auth:${providerId}|${id}`;
+	}
+
+	@debug()
+	private async createAndStoreSession(
+		descriptor?: IntegrationAuthenticationSessionDescriptor,
+	): Promise<AuthenticationSession | undefined> {
+		const session = await this.createSession(descriptor);
+		if (session == null) return undefined;
+
+		const key = this.getSecretKey(this.authProviderId, this.getSessionId(descriptor));
+		await this.container.storage.storeSecret(key, JSON.stringify(session));
+
+		return session;
+	}
+
+	@debug()
+	async getSession(
+		descriptor?: IntegrationAuthenticationSessionDescriptor,
+		options?: { createIfNeeded?: boolean; forceNewSession?: boolean },
+	): Promise<ProviderAuthenticationSession | undefined> {
+		const key = this.getSecretKey(this.authProviderId, this.getSessionId(descriptor));
+
+		if (options?.forceNewSession) {
+			await this.container.storage.deleteSecret(key);
+		}
+
+		let storedSession: StoredSession | undefined;
+		try {
+			const sessionJSON = await this.container.storage.getSecret(key);
+			if (sessionJSON) {
+				storedSession = JSON.parse(sessionJSON);
+			}
+		} catch (ex) {
+			try {
+				await this.container.storage.deleteSecret(key);
+			} catch {}
+
+			if (!options?.createIfNeeded) {
+				throw ex;
+			}
+		}
+
+		if (
+			(options?.createIfNeeded && storedSession == null) ||
+			(storedSession?.expiresAt != null && new Date(storedSession.expiresAt).getTime() < Date.now())
+		) {
+			return this.createAndStoreSession(descriptor);
+		}
+
+		return storedSession as ProviderAuthenticationSession | undefined;
+
+		// For unsupported providers
+		// import { authentication } from 'vscode';
+		// import { wrapForForcedInsecureSSL } from '@env/fetch';
+		//
+		// 	if (descriptor == null) return undefined;
+		// 	const { createIfNeeded, forceNewSession } = options ?? {};
+		// 	return wrapForForcedInsecureSSL(
+		// 		this.container.integrations.ignoreSSLErrors({ id: providerId, domain: descriptor?.domain }),
+		// 		() =>
+		// 			authentication.getSession(providerId, descriptor.scopes, {
+		// 				createIfNone: forceNewSession ? undefined : createIfNeeded,
+		// 				silent: !createIfNeeded && !forceNewSession ? true : undefined,
+		// 				forceNewSession: forceNewSession ? true : undefined,
+		// 			}),
+		// 	);
+	}
 }
 
 export class IntegrationAuthenticationService implements Disposable {
@@ -157,89 +233,16 @@ export class IntegrationAuthenticationService implements Disposable {
 		this.providers.clear();
 	}
 
-	@debug()
-	async createSession(
-		providerId: IntegrationId,
-		descriptor?: IntegrationAuthenticationSessionDescriptor,
-	): Promise<AuthenticationSession | undefined> {
-		const provider = await this.ensureProvider(providerId);
-
-		const session = await provider.createSession(descriptor);
-		if (session == null) return undefined;
-
-		const key = this.getSecretKey(providerId, provider.getSessionId(descriptor));
-		await this.container.storage.storeSecret(key, JSON.stringify(session));
-
-		return session;
-	}
-
-	@debug()
-	async getSession(
-		providerId: IntegrationId,
-		descriptor?: IntegrationAuthenticationSessionDescriptor,
-		options?: { createIfNeeded?: boolean; forceNewSession?: boolean },
-	): Promise<ProviderAuthenticationSession | undefined> {
-		if (this.supports(providerId)) {
-			const provider = await this.ensureProvider(providerId);
-
-			const key = this.getSecretKey(providerId, provider.getSessionId(descriptor));
-
-			if (options?.forceNewSession) {
-				await this.container.storage.deleteSecret(key);
-			}
-
-			let storedSession: StoredSession | undefined;
-			try {
-				const sessionJSON = await this.container.storage.getSecret(key);
-				if (sessionJSON) {
-					storedSession = JSON.parse(sessionJSON);
-				}
-			} catch (ex) {
-				try {
-					await this.container.storage.deleteSecret(key);
-				} catch {}
-
-				if (!options?.createIfNeeded) {
-					throw ex;
-				}
-			}
-
-			if (
-				(options?.createIfNeeded && storedSession == null) ||
-				(storedSession?.expiresAt != null && new Date(storedSession.expiresAt).getTime() < Date.now())
-			) {
-				return this.createSession(providerId, descriptor);
-			}
-
-			return storedSession as ProviderAuthenticationSession | undefined;
-		}
-
-		if (descriptor == null) return undefined;
-
-		const { createIfNeeded, forceNewSession } = options ?? {};
-		return wrapForForcedInsecureSSL(
-			this.container.integrations.ignoreSSLErrors({ id: providerId, domain: descriptor?.domain }),
-			() =>
-				authentication.getSession(providerId, descriptor.scopes, {
-					createIfNone: forceNewSession ? undefined : createIfNeeded,
-					silent: !createIfNeeded && !forceNewSession ? true : undefined,
-					forceNewSession: forceNewSession ? true : undefined,
-				}),
-		);
-	}
-
-	@debug()
-	async deleteSession(providerId: IntegrationId, descriptor?: IntegrationAuthenticationSessionDescriptor) {
-		const provider = await this.ensureProvider(providerId);
-
-		const key = this.getSecretKey(providerId, provider.getSessionId(descriptor));
-		await this.container.storage.deleteSecret(key);
+	async get(providerId: IntegrationId): Promise<IntegrationAuthenticationProvider> {
+		return this.ensureProvider(providerId);
 	}
 
 	@log()
 	async reset() {
 		// TODO: This really isn't ideal, since it will only work for "cloud" providers as we won't have any more specific descriptors
-		await Promise.allSettled(supportedIntegrationIds.map(providerId => this.deleteSession(providerId)));
+		await Promise.allSettled(
+			supportedIntegrationIds.map(async providerId => (await this.ensureProvider(providerId)).deleteSession()),
+		);
 	}
 
 	supports(providerId: string): boolean {
@@ -254,10 +257,6 @@ export class IntegrationAuthenticationService implements Disposable {
 			default:
 				return false;
 		}
-	}
-
-	private getSecretKey(providerId: IntegrationId, id: string): `gitlens.integration.auth:${IntegrationId}|${string}` {
-		return `gitlens.integration.auth:${providerId}|${id}`;
 	}
 
 	private async ensureProvider(providerId: IntegrationId): Promise<IntegrationAuthenticationProvider> {
