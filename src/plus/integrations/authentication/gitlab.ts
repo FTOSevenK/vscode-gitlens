@@ -1,15 +1,9 @@
 import type { AuthenticationSession, Disposable, QuickInputButton } from 'vscode';
 import { env, ThemeIcon, Uri, window } from 'vscode';
-import type { Container } from '../../../container';
-import { HostingIntegrationId } from '../providers/models';
 import type { IntegrationAuthenticationSessionDescriptor } from './integrationAuthentication';
 import { IntegrationAuthenticationProvider } from './integrationAuthentication';
 
 export class GitLabAuthenticationProvider extends IntegrationAuthenticationProvider {
-	constructor(container: Container) {
-		super(container, HostingIntegrationId.GitLab);
-	}
-
 	override async createSession(
 		descriptor?: IntegrationAuthenticationSessionDescriptor,
 	): Promise<AuthenticationSession | undefined> {

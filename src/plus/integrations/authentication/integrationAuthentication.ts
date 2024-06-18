@@ -305,7 +305,7 @@ export class IntegrationAuthenticationService implements Disposable {
 				case SelfHostedIntegrationId.GitLabSelfHosted:
 					provider = new (
 						await import(/* webpackChunkName: "integrations" */ './gitlab')
-					).GitLabAuthenticationProvider(this.container);
+					).GitLabAuthenticationProvider(this.container, providerId);
 					break;
 				case IssueIntegrationId.Jira:
 					provider = new (
