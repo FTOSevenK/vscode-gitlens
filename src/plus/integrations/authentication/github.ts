@@ -1,9 +1,32 @@
 import type { AuthenticationSession, Disposable, QuickInputButton } from 'vscode';
-import { env, ThemeIcon, Uri, window } from 'vscode';
+import { authentication, env, ThemeIcon, Uri, window } from 'vscode';
 import type { Container } from '../../../container';
-import { SelfHostedIntegrationId } from '../providers/models';
+import { HostingIntegrationId, SelfHostedIntegrationId } from '../providers/models';
 import type { IntegrationAuthenticationSessionDescriptor } from './integrationAuthentication';
 import { IntegrationAuthenticationProvider } from './integrationAuthentication';
+
+export class GitHubAuthenticationProvider extends IntegrationAuthenticationProvider {
+	constructor(container: Container) {
+		super(container, HostingIntegrationId.GitHub);
+	}
+
+	override async createSession(
+		descriptor?: IntegrationAuthenticationSessionDescriptor,
+		options?: { authorizeIfNeeded?: boolean },
+	): Promise<AuthenticationSession | undefined> {
+		if (descriptor != null) {
+			const session = await authentication.getSession(this.authProviderId, descriptor.scopes, {
+				createIfNone: undefined,
+				silent: undefined,
+				forceNewSession: undefined,
+			});
+			if (session != null) {
+				return session;
+			}
+		}
+		return super.createSession(descriptor, options);
+	}
+}
 
 export class GitHubEnterpriseAuthenticationProvider extends IntegrationAuthenticationProvider {
 	constructor(container: Container) {
