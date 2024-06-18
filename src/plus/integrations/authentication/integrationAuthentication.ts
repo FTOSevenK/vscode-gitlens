@@ -143,12 +143,21 @@ export class IntegrationAuthenticationProvider {
 		}
 	}
 
-	protected getCompletionInputTitle(): string {
-		throw new Error('Method `getCompletionInputTitle` must be implemented in subclass');
+	private getUriHandlerDeferredExecutor(): DeferredEventExecutor<Uri, string> {
+		return (uri: Uri, resolve, reject) => {
+			const queryParams: URLSearchParams = new URLSearchParams(uri.query);
+			const provider = queryParams.get('provider');
+			if (provider !== this.authProviderId) {
+				reject('Invalid provider');
+				return;
+			}
+
+			resolve(uri.toString(true));
+		};
 	}
 
-	protected getUriHandlerDeferredExecutor(): DeferredEventExecutor<Uri, string> {
-		throw new Error('Method `getUriHandlerDeferredExecutor` must be implemented in subclass');
+	protected getCompletionInputTitle(): string {
+		throw new Error('Method `getCompletionInputTitle` must be implemented in subclass');
 	}
 
 	private getSecretKey(providerId: IntegrationId, id: string): `gitlens.integration.auth:${IntegrationId}|${string}` {
